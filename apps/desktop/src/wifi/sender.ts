@@ -609,10 +609,11 @@ export class TcpCommandSession {
 
       if (options.shouldStop?.()) break;
 
-      let batchStart = cmdPos;
-      let batchEnd = Math.min(cmdPos + batchSize, commands.length);
+      const batchStart = cmdPos;
+      const batchEnd = Math.min(cmdPos + batchSize, commands.length);
       const commandSequence = this.sequence;
       let attempt = 0;
+      let batchFellBack = false;
 
       while (true) {
         const currentBatch = commands.slice(batchStart, batchEnd);
@@ -650,29 +651,31 @@ export class TcpCommandSession {
           if (isControllerInputReportFailure(error)) throw error;
 
           const failedAt = parseBatchFailedAt(error);
-          if (failedAt !== undefined) {
-            const newStart = cmdPos + failedAt;
-            if (newStart >= batchEnd) {
-              throw error;
+          if (failedAt !== undefined && failedAt > 0) {
+            for (let j = cmdPos; j < cmdPos + failedAt; j++) {
+              const cmd = commands[j]!;
+              await options.onProgress?.({ index: j + 1, total: commands.length, command: cmd });
+              inputTiming = parseInputConfigCommand(cmd) ?? inputTiming;
+              updateBasicPaletteStateForCommand(cmd, basicPaletteState);
             }
-            batchStart = newStart;
-            options.onDeviceLine?.(`WARN retry batch seq=${commandSequence} skip=${failedAt} start=${batchStart} attempt=${attempt + 1} reason=${error instanceof Error ? error.message : String(error)}`);
-          } else if (attempt >= options.retries) {
-            throw error;
-          } else {
-            options.onDeviceLine?.(`WARN retry batch seq=${commandSequence} start=${batchStart} attempt=${attempt + 1} reason=${error instanceof Error ? error.message : String(error)}`);
+            cmdPos += failedAt;
+            options.onDeviceLine?.(`WARN batch seq=${commandSequence} failed_at=${failedAt} next_start=${cmdPos} reason=${error instanceof Error ? error.message : String(error)}`);
+            batchFellBack = true;
+            break;
           }
+
+          if (attempt >= options.retries) throw error;
+
+          const message = error instanceof Error ? error.message : String(error);
+          options.onDeviceLine?.(`WARN retry batch seq=${commandSequence} start=${batchStart} attempt=${attempt + 1} reason=${message}`);
           attempt += 1;
         }
       }
 
-      for (let j = cmdPos; j < batchEnd; j++) {
+      if (batchFellBack) continue;
+
+      for (let j = batchStart; j < batchEnd; j++) {
         const cmd = commands[j]!;
-        if (j < batchStart) {
-          inputTiming = parseInputConfigCommand(cmd) ?? inputTiming;
-          updateBasicPaletteStateForCommand(cmd, basicPaletteState);
-          continue;
-        }
         await options.onProgress?.({ index: j + 1, total: commands.length, command: cmd });
         inputTiming = parseInputConfigCommand(cmd) ?? inputTiming;
         updateBasicPaletteStateForCommand(cmd, basicPaletteState);
