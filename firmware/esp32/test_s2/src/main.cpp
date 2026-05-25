@@ -379,7 +379,7 @@ bool parseBatchSize(const String &command, int &batchSize) {
 
 }  // namespace
 
-String readRawTcpLine(unsigned long timeoutMs = 100) {
+String readRawTcpLine(unsigned long timeoutMs = 500) {
   String result;
   result.reserve(64);
   const unsigned long deadline = millis() + timeoutMs;

@@ -103,6 +103,25 @@ async function writeLine(socket: Socket, line: string): Promise<void> {
   });
 }
 
+async function writeBatchLines(socket: Socket, lines: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (socket.destroyed) {
+      reject(new Error("TCP session closed."));
+      return;
+    }
+
+    const data = lines.map((line) => `${line}\n`).join("");
+    socket.write(data, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
 export function getAckTimeoutForCommand(
   command: string,
   baseTimeoutMs: number,
@@ -602,10 +621,7 @@ export class TcpCommandSession {
 
         try {
           this.beginForegroundCapture();
-          await writeLine(this.socket!, framedBatch);
-          for (const cmd of currentBatch) {
-            await writeLine(this.socket!, cmd);
-          }
+          await writeBatchLines(this.socket!, [framedBatch, ...currentBatch]);
           try {
             let maxCmdTimeout = options.ackTimeoutMs;
             for (const cmd of currentBatch) {

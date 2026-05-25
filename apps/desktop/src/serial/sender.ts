@@ -467,6 +467,27 @@ function writeLine(port: SerialPort, line: string): Promise<void> {
   });
 }
 
+function writeBatchLines(port: SerialPort, lines: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const data = lines.map((line) => `${line}\n`).join("");
+    port.write(data, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      port.drain((drainError) => {
+        if (drainError) {
+          reject(drainError);
+          return;
+        }
+
+        resolve();
+      });
+    });
+  });
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1020,10 +1041,7 @@ export class SerialCommandSession {
 
         try {
           this.beginForegroundDeviceLineCapture();
-          await writeLine(this.port, framedBatch);
-          for (const cmd of currentBatch) {
-            await writeLine(this.port, cmd);
-          }
+          await writeBatchLines(this.port, [framedBatch, ...currentBatch]);
           try {
             let maxCmdTimeout = options.ackTimeoutMs;
             for (const cmd of currentBatch) {
