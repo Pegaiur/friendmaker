@@ -167,6 +167,7 @@ const state = {
     inputDelay: 45,
     buttonPressDuration: 65,
     homeDuration: 1800,
+    batchSize: 10,
   },
   studio: {
     busy: false,
@@ -498,6 +499,9 @@ const els = {
   timingInputDelayInput: document.getElementById("timing-input-delay-input"),
   timingButtonPressRange: document.getElementById("timing-button-press-range"),
   timingButtonPressInput: document.getElementById("timing-button-press-input"),
+  timingBatchSizeRange: document.getElementById("timing-batch-size-range"),
+  timingBatchSizeInput: document.getElementById("timing-batch-size-input"),
+  timingBatchSizeValue: document.getElementById("timing-batch-size-value"),
   timingResetButton: document.getElementById("timing-reset-button"),
   timingCurrentSummary: document.getElementById("timing-current-summary"),
   timingInputDelayBadge: document.getElementById("timing-input-delay-badge"),
@@ -567,6 +571,7 @@ const DEFAULT_SHARED_TIMING = {
   inputDelay: 45,
   buttonPressDuration: 65,
   homeDuration: 1800,
+  batchSize: 10,
 };
 const SHARED_TIMING_LIMITS = {
   inputDelay: { min: 16, max: 100, step: 1 },
@@ -1229,6 +1234,18 @@ els.timingButtonPressInput.addEventListener("change", () => {
 });
 
 els.timingButtonPressInput.addEventListener("blur", () => {
+  syncTimingLabUi();
+});
+
+els.timingBatchSizeRange.addEventListener("input", () => {
+  setSharedBatchSize(els.timingBatchSizeRange.value);
+});
+
+els.timingBatchSizeInput.addEventListener("change", () => {
+  setSharedBatchSize(els.timingBatchSizeInput.value);
+});
+
+els.timingBatchSizeInput.addEventListener("blur", () => {
   syncTimingLabUi();
 });
 
@@ -4151,11 +4168,16 @@ function syncTimingLabUi() {
   els.timingInputDelayInput.disabled = disabled;
   els.timingButtonPressRange.disabled = disabled;
   els.timingButtonPressInput.disabled = disabled;
+  els.timingBatchSizeRange.disabled = disabled;
+  els.timingBatchSizeInput.disabled = disabled;
   els.timingResetButton.disabled = disabled;
   els.timingInputDelayRange.value = String(inputTiming.inputDelay);
   els.timingInputDelayInput.value = String(inputTiming.inputDelay);
   els.timingButtonPressRange.value = String(inputTiming.buttonPressDuration);
   els.timingButtonPressInput.value = String(inputTiming.buttonPressDuration);
+  els.timingBatchSizeRange.value = String(inputTiming.batchSize);
+  els.timingBatchSizeInput.value = String(inputTiming.batchSize);
+  els.timingBatchSizeValue.textContent = String(inputTiming.batchSize);
   els.timingCurrentSummary.textContent =
     `当前会同时用于手柄测试、测速和正式绘制：稳定等待 ${inputTiming.inputDelay}ms · 按键保持 ${inputTiming.buttonPressDuration}ms。`;
 
@@ -4262,6 +4284,7 @@ async function runExecution({
         ackTimeoutMs,
         retries,
         ackDelayMs: 0,
+        batchSize: state.sharedTiming.batchSize,
       }),
     });
     const payload = await response.json();
@@ -5310,6 +5333,11 @@ function applySharedTiming(nextTiming, { persist = true } = {}) {
       SHARED_TIMING_LIMITS.buttonPressDuration,
     ),
     homeDuration: DEFAULT_SHARED_TIMING.homeDuration,
+    batchSize: normalizeTimingValue(
+      nextTiming?.batchSize,
+      DEFAULT_SHARED_TIMING.batchSize,
+      { min: 1, max: 50, step: 1 },
+    ),
   };
   syncSharedTimingIntoStudioProfile();
 
@@ -5341,6 +5369,7 @@ function updateSharedTiming(nextTiming) {
     {
       inputDelay: nextTiming.inputDelay ?? state.sharedTiming.inputDelay,
       buttonPressDuration: nextTiming.buttonPressDuration ?? state.sharedTiming.buttonPressDuration,
+      batchSize: nextTiming.batchSize ?? state.sharedTiming.batchSize,
     },
     { persist: true },
   );
@@ -5363,6 +5392,10 @@ function setSharedInputDelay(value) {
 
 function setSharedButtonPressDuration(value) {
   updateSharedTiming({ buttonPressDuration: value });
+}
+
+function setSharedBatchSize(value) {
+  updateSharedTiming({ batchSize: value });
 }
 
 function resetSharedTiming() {

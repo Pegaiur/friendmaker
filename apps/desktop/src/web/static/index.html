@@ -1208,6 +1208,30 @@
               <button id="timing-reset-button" class="ghost" type="button">恢复推荐默认值 45 / 65</button>
             </div>
 
+            <div class="timing-control-grid" style="grid-template-columns:1fr">
+              <article class="timing-control-card">
+                <div class="timing-control-head">
+                  <h3 class="timing-control-title">
+                    <span class="timing-control-kicker">传输优化</span>
+                    <span class="timing-control-name">批次大小</span>
+                    <span class="timing-control-subtitle">batchSize</span>
+                  </h3>
+                </div>
+                <p class="timing-control-copy">一次发送的命令数。默认 1 = 逐条一问一答；增大可消除 TCP 空闲等待（推荐 10）。仅 WiFi 通道生效。</p>
+                <label class="range-row timing-control-range">
+                  <span class="timing-range-label">
+                    <span id="timing-batch-size-value">10</span>
+                    <span class="range-unit">条/批</span>
+                  </span>
+                  <input id="timing-batch-size-range" type="range" min="1" max="50" step="1" value="10" />
+                  <span class="timing-range-input-wrap">
+                    <input id="timing-batch-size-input" type="number" min="1" max="50" step="1" value="10" />
+                    <span class="range-unit">条</span>
+                  </span>
+                </label>
+              </article>
+            </div>
+
             <div class="panel-head compact">
               <h2>先做一个小动作</h2>
               <p>先用小动作确认连接和参数。</p>
