@@ -1616,6 +1616,7 @@ async function executeCommands(body: {
   retries?: number;
   ackDelayMs?: number;
   errorAtCommand?: number;
+  batchSize?: number;
 }): Promise<{
   success: true;
   target: "simulate" | "serial" | "wifi";
@@ -1650,6 +1651,7 @@ async function executeCommands(body: {
         baudRate: body.baudRate ?? 115200,
         ackTimeoutMs,
         retries,
+        ...(body.batchSize !== undefined ? { batchSize: body.batchSize } : {}),
         onDeviceLine: (line) => {
           lines.push(line);
         },
@@ -1669,6 +1671,7 @@ async function executeCommands(body: {
         port,
         ackTimeoutMs,
         retries,
+        ...(body.batchSize !== undefined ? { batchSize: body.batchSize } : {}),
         onDeviceLine: (line) => {
           lines.push(line);
         },
@@ -2139,6 +2142,7 @@ async function handleExecute(request: IncomingMessage, response: ServerResponse)
     retries?: number;
     ackDelayMs?: number;
     errorAtCommand?: number;
+    batchSize?: number;
   };
 
   try {
@@ -2167,6 +2171,7 @@ async function handleExecutionStart(
     retries?: number;
     ackDelayMs?: number;
     errorAtCommand?: number;
+    batchSize?: number;
     resumePlan?: ResumePlan;
     sourceLabel?: string;
     profileSummary?: ExecutionStartProfileSummary;

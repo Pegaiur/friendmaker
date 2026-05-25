@@ -169,6 +169,15 @@ void cacheSequencedResult(const SequencedFrame &frame, const String &ackLine) {
   sequencedCommandCache.lastAckLine = ackLine;
 }
 
+bool parseBatchSize(const String &command, int &batchSize) {
+  if (!command.startsWith("BATCH ")) return false;
+  const String token = command.substring(6);
+  const int n = token.toInt();
+  if (n < 1 || n > 255) return false;
+  batchSize = n;
+  return true;
+}
+
 }  // namespace
 
 void setup() {
@@ -233,6 +242,30 @@ void loop() {
   String ackLine;
 
   if (!validateSequencedFrame(frame, ackLine)) {
+    Serial.println(ackLine);
+    return;
+  }
+
+  int batchSize = 0;
+  if (parseBatchSize(frame.command, batchSize)) {
+    int batchDone = 0;
+    for (; batchDone < batchSize; batchDone++) {
+      String cmdLine = Serial.readStringUntil('\n');
+      cmdLine.trim();
+      if (cmdLine.length() == 0) {
+        ackLine = makeErrorAck(frame, "BATCH failed_at=" + String(batchDone) + " missing command");
+        Serial.println(ackLine);
+        return;
+      }
+      String cmdError;
+      if (!executeCommand(cmdLine, controller, cmdError)) {
+        ackLine = makeErrorAck(frame, "BATCH failed_at=" + String(batchDone) + " " + cmdError);
+        Serial.println(ackLine);
+        return;
+      }
+    }
+    ackLine = makeOkAck(frame);
+    cacheSequencedResult(frame, ackLine);
     Serial.println(ackLine);
     return;
   }

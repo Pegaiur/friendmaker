@@ -368,7 +368,32 @@ bool isTimingConfigCommand(const String &line, uint16_t &pressMs, uint16_t &dela
   return true;
 }
 
+bool parseBatchSize(const String &command, int &batchSize) {
+  if (!command.startsWith("BATCH ")) return false;
+  const String token = command.substring(6);
+  const int n = token.toInt();
+  if (n < 1 || n > 255) return false;
+  batchSize = n;
+  return true;
+}
+
 }  // namespace
+
+String readRawTcpLine(unsigned long timeoutMs = 100) {
+  String result;
+  result.reserve(64);
+  const unsigned long deadline = millis() + timeoutMs;
+  while (millis() < deadline) {
+    if (!tcpClient || !tcpClient.connected()) return result;
+    while (tcpClient.available() > 0) {
+      const char c = tcpClient.read();
+      if (c == '\n') return result;
+      if (c != '\r') result += c;
+    }
+    delay(1);
+  }
+  return result;
+}
 
 void executeTimingCommand(const String &line) {
   uint16_t pressMs = 0;
@@ -443,6 +468,41 @@ void handleSeqCommand(const String &line) {
     cacheSequencedResult(frame, ackLine);
     tcpLogf("SEQ cfg_input applied #%u sid=%s seq=%lu press=%u delay=%u",
             tcpRxCount, frame.sessionId.c_str(), frame.sequence, pressMs, delayMs);
+    tcpClient.println(ackLine);
+    return;
+  }
+
+  int batchSize = 0;
+  if (parseBatchSize(frame.command, batchSize)) {
+    tcpLogf("SEQ batch_start #%u sid=%s seq=%lu n=%d",
+            tcpRxCount, frame.sessionId.c_str(), frame.sequence, batchSize);
+    const unsigned long t0 = millis();
+    int batchDone = 0;
+    for (; batchDone < batchSize; batchDone++) {
+      String cmdLine = readRawTcpLine();
+      cmdLine.trim();
+      if (cmdLine.length() == 0) {
+        ackLine = makeErrorAck(frame, "BATCH failed_at=" + String(batchDone) + " missing command");
+        tcpLogf("SEQ batch_miss #%u sid=%s seq=%lu index=%d",
+                tcpRxCount, frame.sessionId.c_str(), frame.sequence, batchDone);
+        tcpClient.println(ackLine);
+        return;
+      }
+      String error;
+      if (!executeCommand(cmdLine, controller, error)) {
+        ackLine = makeErrorAck(frame, "BATCH failed_at=" + String(batchDone) + " " + error);
+        tcpLogf("SEQ batch_err #%u sid=%s seq=%lu index=%d err=%s",
+                tcpRxCount, frame.sessionId.c_str(), frame.sequence, batchDone,
+                error.length() > 0 ? error.c_str() : "unknown");
+        tcpClient.println(ackLine);
+        return;
+      }
+    }
+    const unsigned long t1 = millis();
+    ackLine = makeOkAck(frame);
+    cacheSequencedResult(frame, ackLine);
+    tcpLogf("SEQ ok #%u sid=%s seq=%lu batch=%d elapsed=%lu",
+            tcpRxCount, frame.sessionId.c_str(), frame.sequence, batchDone, t1 - t0);
     tcpClient.println(ackLine);
     return;
   }

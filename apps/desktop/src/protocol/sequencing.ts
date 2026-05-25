@@ -4,6 +4,7 @@ const SESSION_ID_RE = /^[0-9a-f]{8}$/iu;
 const SEQUENCE_RE = /^[1-9]\d*$/u;
 const OK_ACK_RE = /^OK\s+([0-9a-f]{8})\s+([1-9]\d*)$/iu;
 const ERR_ACK_RE = /^ERR\s+([0-9a-f]{8})\s+([1-9]\d*)\s+(.+)$/iu;
+const ERR_BATCH_ACK_RE = /^ERR\s+([0-9a-f]{8})\s+([1-9]\d*)\s+BATCH\s+failed_at=(\d+)\s+(.+)$/iu;
 const FRAME_RE = /^SEQ\s+([0-9a-f]{8})\s+([1-9]\d*)\s+(.+)$/iu;
 
 export interface SequencedFrame {
@@ -23,6 +24,7 @@ export type SequencedAck =
       sessionId: string;
       sequence: number;
       message: string;
+      failedAt?: number;
     };
 
 function parseSequenceToken(value: string): number | null {
@@ -100,6 +102,24 @@ export function parseSequencedAck(line: string): SequencedAck | null {
         type: "ok",
         sessionId,
         sequence,
+      };
+    }
+  }
+
+  const errBatchMatch = ERR_BATCH_ACK_RE.exec(cleanLine);
+
+  if (errBatchMatch?.[1] && errBatchMatch[2] && errBatchMatch[3] && errBatchMatch[4]) {
+    const sessionId = normalizeSessionId(errBatchMatch[1]);
+    const sequence = parseSequenceToken(errBatchMatch[2]);
+    const failedAt = Number.parseInt(errBatchMatch[3], 10);
+
+    if (sessionId && sequence !== null && Number.isSafeInteger(failedAt)) {
+      return {
+        type: "err",
+        sessionId,
+        sequence,
+        message: errBatchMatch[4].trim(),
+        failedAt,
       };
     }
   }

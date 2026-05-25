@@ -40,6 +40,7 @@ const CONTROLLER_SEND_REPORT_FAILURE_THRESHOLD = 10;
 interface SerialCommandSendOptions {
   ackTimeoutMs: number;
   retries: number;
+  batchSize?: number;
   onProgress?: (progress: ProgressUpdate) => Promise<void> | void;
   onDeviceLine?: (line: string) => void;
   beforeCommand?: () => Promise<void>;
@@ -476,6 +477,13 @@ function isUnsequencedAckLine(line: string): boolean {
 
 function isPassiveDeviceLine(line: string): boolean {
   return !parseSequencedAck(line) && !isUnsequencedAckLine(line);
+}
+
+function parseBatchFailedAt(error: unknown): number | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const match = /failed_at=(\d+)/.exec(error.message);
+  if (!match?.[1]) return undefined;
+  return Number.parseInt(match[1], 10);
 }
 
 async function stabilizeFreshSerialSession(
@@ -991,33 +999,41 @@ export class SerialCommandSession {
     const basicPaletteState = createBasicPaletteTimingState();
     this.flushPassiveDeviceLines(options.onDeviceLine);
 
-    for (const [index, command] of commands.entries()) {
+    const batchSize = Math.max(1, options.batchSize ?? 1);
+    let cmdPos = 0;
+
+    while (cmdPos < commands.length) {
       this.flushPassiveDeviceLines(options.onDeviceLine);
       await options.beforeCommand?.();
 
-      if (options.shouldStop?.()) {
-        break;
-      }
+      if (options.shouldStop?.()) break;
 
-      let attempt = 0;
-      let sent = false;
+      let batchStart = cmdPos;
+      let batchEnd = Math.min(cmdPos + batchSize, commands.length);
       const commandSequence = this.sequence;
-      const framedCommand = formatSequencedCommand(this.sessionId, commandSequence, command);
+      let batchOk = false;
+      let attempt = 0;
 
-      while (!sent) {
+      while (!batchOk) {
+        const currentBatch = commands.slice(batchStart, batchEnd);
+        const framedBatch = formatSequencedCommand(this.sessionId, commandSequence, `BATCH ${currentBatch.length}`);
+
         try {
           this.beginForegroundDeviceLineCapture();
-          await writeLine(this.port, framedCommand);
+          await writeLine(this.port, framedBatch);
+          for (const cmd of currentBatch) {
+            await writeLine(this.port, cmd);
+          }
           try {
+            let maxCmdTimeout = options.ackTimeoutMs;
+            for (const cmd of currentBatch) {
+              const t = getAckTimeoutForCommand(cmd, options.ackTimeoutMs, inputTiming, basicPaletteState);
+              if (t > maxCmdTimeout) maxCmdTimeout = t;
+            }
             await waitForAck(
               this.parser,
               this.port,
-              getAckTimeoutForCommand(
-                command,
-                options.ackTimeoutMs,
-                inputTiming,
-                basicPaletteState,
-              ),
+              maxCmdTimeout,
               {
                 sessionId: this.sessionId,
                 sequence: commandSequence,
@@ -1033,38 +1049,38 @@ export class SerialCommandSession {
           } finally {
             this.endForegroundDeviceLineCapture();
           }
-          sent = true;
+          batchOk = true;
         } catch (error) {
           this.endForegroundDeviceLineCapture();
-          if (options.shouldStop?.()) {
-            throw new Error("Execution stopped.");
+          if (options.shouldStop?.()) throw new Error("Execution stopped.");
+          if (isControllerInputReportFailure(error)) throw error;
+
+          const failedAt = parseBatchFailedAt(error);
+          if (failedAt !== undefined && failedAt > 0 && batchStart + failedAt < batchEnd) {
+            batchStart += failedAt;
           }
 
-          if (isControllerInputReportFailure(error)) {
-            throw error;
-          }
-
-          if (attempt >= options.retries) {
-            throw error;
-          }
+          if (attempt >= options.retries) throw error;
 
           const message = error instanceof Error ? error.message : String(error);
-          options.onDeviceLine?.(
-            `WARN retry command=${index + 1} attempt=${attempt + 1} reason=${message}`,
-          );
+          options.onDeviceLine?.(`WARN retry batch seq=${commandSequence} start=${batchStart} attempt=${attempt + 1} reason=${message}`);
           attempt += 1;
         }
       }
 
-      await options.onProgress?.({
-        index: index + 1,
-        total: commands.length,
-        command,
-      });
-      inputTiming = parseInputConfigCommand(command) ?? inputTiming;
-      updateBasicPaletteStateForCommand(command, basicPaletteState);
+      for (let j = batchStart; j < batchEnd; j++) {
+        const cmd = commands[j]!;
+        await options.onProgress?.({
+          index: j + 1,
+          total: commands.length,
+          command: cmd,
+        });
+        inputTiming = parseInputConfigCommand(cmd) ?? inputTiming;
+        updateBasicPaletteStateForCommand(cmd, basicPaletteState);
+      }
       this.sequence += 1;
       this.lastUsedAtValue = Date.now();
+      cmdPos = batchEnd;
     }
 
     this.flushPassiveDeviceLines(options.onDeviceLine);
