@@ -525,6 +525,7 @@ const els = {
   timingBenchmarkTheoretical: document.getElementById("timing-benchmark-theoretical"),
   timingBenchmarkAverage: document.getElementById("timing-benchmark-average"),
   timingBenchmarkDeviceSummary: document.getElementById("timing-benchmark-device-summary"),
+  timingBenchmarkMisses: document.getElementById("timing-benchmark-misses"),
   timingBenchmarkTime: document.getElementById("timing-benchmark-time"),
   timingLogOutput: document.getElementById("timing-log-output"),
   timingCopyLogButton: document.getElementById("timing-copy-log-button"),
@@ -4136,6 +4137,7 @@ function renderTimingBenchmarkResult() {
     buttonPressDuration: benchmark.buttonPressDuration,
     inputDelay: benchmark.inputDelay,
     homeDuration: benchmark.homeDuration,
+    batchSize: state.sharedTiming.batchSize,
   });
   els.timingBenchmarkMeasured.textContent =
     typeof benchmark.measuredMs === "number" ? `${benchmark.measuredMs} ms` : "-";
@@ -4146,6 +4148,10 @@ function renderTimingBenchmarkResult() {
   els.timingBenchmarkAverage.textContent =
     typeof benchmark.averageMs === "number" ? `${benchmark.averageMs} ms / 动作` : "-";
   els.timingBenchmarkDeviceSummary.textContent = benchmark.deviceSummary || "-";
+  els.timingBenchmarkMisses.textContent =
+    typeof benchmark.misses === "number"
+      ? [`${benchmark.misses} 条`, typeof benchmark.missRate === "string" ? `${benchmark.missRate}%` : ""].filter(Boolean).join(" · ")
+      : "-";
   els.timingBenchmarkTime.textContent =
     benchmark.updatedAt instanceof Date ? benchmark.updatedAt.toLocaleTimeString() : "-";
 }
@@ -4473,6 +4479,17 @@ function summarizeTimingDeviceLines(lines) {
   return summary.length > 0 ? summary.join(" | ") : "本次没有额外设备信息。";
 }
 
+function countBatchMissesFromLines(lines) {
+  let misses = 0;
+  for (const line of lines ?? []) {
+    if (line.startsWith("WARN retry batch") || line.startsWith("WARN batch seq=")) {
+      const m = /failed_at=(\d+)/.exec(line);
+      misses += m ? Number.parseInt(m[1], 10) : 0;
+    }
+  }
+  return misses;
+}
+
 async function runTimingBenchmark(modeKey = "standard") {
   const mode = TIMING_BENCHMARK_MODES[modeKey] ?? TIMING_BENCHMARK_MODES.standard;
   const benchmarkCommands = buildTimingBenchmarkCommands(mode);
@@ -4490,6 +4507,8 @@ async function runTimingBenchmark(modeKey = "standard") {
     measuredMs: null,
     theoreticalMs: null,
     averageMs: null,
+    misses: null,
+    missRate: null,
     deviceSummary: "等待设备返回...",
     updatedAt: new Date(),
   };
@@ -4515,6 +4534,7 @@ async function runTimingBenchmark(modeKey = "standard") {
   const theoreticalMs =
     result.actionCommandCount *
     (benchmarkTiming.buttonPressDuration + benchmarkTiming.inputDelay);
+  const misses = countBatchMissesFromLines(result.payload.lines);
   state.timingLab.benchmark = {
     ...state.timingLab.benchmark,
     status: "success",
@@ -4523,6 +4543,8 @@ async function runTimingBenchmark(modeKey = "standard") {
     theoreticalMs,
     averageMs:
       result.actionCommandCount > 0 ? Math.round(result.elapsedMs / result.actionCommandCount) : null,
+    misses,
+    missRate: result.actionCommandCount > 0 ? (misses / result.actionCommandCount * 100).toFixed(2) : null,
     deviceSummary: summarizeTimingDeviceLines(result.payload.lines),
     updatedAt: new Date(),
   };
@@ -5198,7 +5220,11 @@ function normalizeTimingValue(value, fallback, limits) {
 }
 
 function formatTimingSummary(timing) {
-  return `按键保持 ${timing.buttonPressDuration}ms · 稳定等待 ${timing.inputDelay}ms`;
+  const parts = [`按键保持 ${timing.buttonPressDuration}ms · 稳定等待 ${timing.inputDelay}ms`];
+  if (typeof timing.batchSize === "number" && timing.batchSize > 1) {
+    parts.push(`批次 ${timing.batchSize}`);
+  }
+  return parts.join(" · ");
 }
 
 function describeInputDelaySetting(value) {
