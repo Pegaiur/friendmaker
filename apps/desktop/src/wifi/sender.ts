@@ -37,7 +37,6 @@ import {
 } from "../protocol/sequencing.js";
 import {
   DEFAULT_SAFE_INPUT_TIMING,
-  isControllerInputReportFailure,
   parseInputConfigCommand,
   type InputTiming,
 } from "../protocol/timing.js";
@@ -72,13 +71,6 @@ function isUnsequencedAckLine(line: string): boolean {
 
 function isPassiveDeviceLine(line: string): boolean {
   return !parseSequencedAck(line) && !isUnsequencedAckLine(line);
-}
-
-function parseBatchFailedAt(error: unknown): number | undefined {
-  if (!(error instanceof Error)) return undefined;
-  const match = /failed_at=(\d+)/.exec(error.message);
-  if (!match?.[1]) return undefined;
-  return Number.parseInt(match[1], 10);
 }
 
 function delay(ms: number): Promise<void> {
@@ -612,55 +604,38 @@ export class TcpCommandSession {
       let batchStart = cmdPos;
       let batchEnd = Math.min(cmdPos + batchSize, commands.length);
       const commandSequence = this.sequence;
-      let batchOk = false;
-      let attempt = 0;
 
-      while (!batchOk) {
-        const currentBatch = commands.slice(batchStart, batchEnd);
-        const framedBatch = formatSequencedCommand(this.sessionId, commandSequence, `BATCH ${currentBatch.length}`);
+      const currentBatch = commands.slice(batchStart, batchEnd);
+      const framedBatch = formatSequencedCommand(this.sessionId, commandSequence, `BATCH ${currentBatch.length}`);
 
+      try {
+        this.beginForegroundCapture();
+        await writeBatchLines(this.socket!, [framedBatch, ...currentBatch]);
         try {
-          this.beginForegroundCapture();
-          await writeBatchLines(this.socket!, [framedBatch, ...currentBatch]);
-          try {
-            let maxCmdTimeout = options.ackTimeoutMs;
-            for (const cmd of currentBatch) {
-              const t = getAckTimeoutForCommand(cmd, options.ackTimeoutMs, inputTiming, basicPaletteState);
-              if (t > maxCmdTimeout) maxCmdTimeout = t;
-            }
-            await waitForAck(
-              this.rl!,
-              this.socket!,
-              maxCmdTimeout,
-              { sessionId: this.sessionId, sequence: commandSequence },
-              {
-                ...(options.onDeviceLine ? { onDeviceLine: options.onDeviceLine } : {}),
-                onInterruptReady: (interrupt) => {
-                  this.interruptAckWait = interrupt;
-                  options.onInterruptReady?.(interrupt);
-                },
+          let maxCmdTimeout = options.ackTimeoutMs;
+          for (const cmd of currentBatch) {
+            const t = getAckTimeoutForCommand(cmd, options.ackTimeoutMs, inputTiming, basicPaletteState);
+            if (t > maxCmdTimeout) maxCmdTimeout = t;
+          }
+          await waitForAck(
+            this.rl!,
+            this.socket!,
+            maxCmdTimeout,
+            { sessionId: this.sessionId, sequence: commandSequence },
+            {
+              ...(options.onDeviceLine ? { onDeviceLine: options.onDeviceLine } : {}),
+              onInterruptReady: (interrupt) => {
+                this.interruptAckWait = interrupt;
+                options.onInterruptReady?.(interrupt);
               },
-            );
-          } finally {
-            this.endForegroundCapture();
-          }
-          batchOk = true;
-        } catch (error) {
+            },
+          );
+        } finally {
           this.endForegroundCapture();
-          if (options.shouldStop?.()) throw new Error("Execution stopped.");
-          if (isControllerInputReportFailure(error)) throw error;
-
-          const failedAt = parseBatchFailedAt(error);
-          if (failedAt !== undefined && failedAt > 0 && batchStart + failedAt < batchEnd) {
-            batchStart += failedAt;
-          }
-
-          if (attempt >= options.retries) throw error;
-
-          const message = error instanceof Error ? error.message : String(error);
-          options.onDeviceLine?.(`WARN retry batch seq=${commandSequence} start=${batchStart} attempt=${attempt + 1} reason=${message}`);
-          attempt += 1;
         }
+      } catch (error) {
+        this.endForegroundCapture();
+        throw error;
       }
 
       for (let j = batchStart; j < batchEnd; j++) {
